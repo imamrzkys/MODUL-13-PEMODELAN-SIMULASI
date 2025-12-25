@@ -1,148 +1,472 @@
 """
-Modul untuk semua fungsi visualisasi data.
+Plotting functions for visualizations
 """
-
-import pandas as pd
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
-from typing import Optional, Tuple
+from typing import Tuple, Optional, Dict
+import logging
 
-from src.utils import normalize_data, check_statsmodels
+# Try to import plotly, but make it optional
+try:
+    import plotly.graph_objects as go
+    import plotly.express as px
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
 
-# Atur gaya plot agar sesuai dengan tema gelap Streamlit
-plt.style.use('dark_background')
+from .utils import ensure_dir, Config
 
-def plot_time_series(df: pd.DataFrame) -> Figure:
-    """Plot deret waktu populasi Moose dan Serigala dalam satu sumbu."""
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(df.index, df['Moose'], label='Moose', color='skyblue')
-    ax.plot(df.index, df['Wolves'], label='Serigala', color='salmon')
-    ax.set_xlabel('Tahun')
-    ax.set_ylabel('Populasi')
-    ax.set_title('Populasi Moose dan Serigala (1980-2019)')
-    ax.legend()
+logger = logging.getLogger(__name__)
+
+if not PLOTLY_AVAILABLE:
+    logger.warning("Plotly not available, 3D plots will use matplotlib")
+
+
+def save_fig(fig: Figure, filename: str, directory: str = None) -> str:
+    """
+    Save matplotlib figure to file.
+    
+    Args:
+        fig: Matplotlib figure
+        filename: Output filename
+        directory: Output directory (default: Config.VIZ_DIR)
+        
+    Returns:
+        Full path to saved file
+    """
+    if directory is None:
+        directory = Config.VIZ_DIR
+    
+    ensure_dir(directory)
+    filepath = f"{directory}/{filename}"
+    fig.savefig(filepath, dpi=150, bbox_inches='tight')
+    logger.info(f"Saved figure: {filepath}")
+    return filepath
+
+
+def plot_raw_data(
+    df: pd.DataFrame,
+    title: str = "Data Asli: Moose vs Wolves",
+    save: bool = True,
+    filename: str = "01_data_asli.png"
+) -> Figure:
+    """
+    Plot raw time series data.
+    
+    Args:
+        df: DataFrame with 'prey' and 'predator' columns, year as index
+        title: Plot title
+        save: Whether to save the figure
+        filename: Output filename
+        
+    Returns:
+        Matplotlib figure
+    """
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.plot(df.index, df['prey'], 'o-', label='Moose (Prey)', linewidth=2, markersize=6)
+    ax.plot(df.index, df['predator'], 's-', label='Wolves (Predator)', linewidth=2, markersize=6)
+    ax.set_xlabel('Year', fontsize=12)
+    ax.set_ylabel('Population', fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight='bold')
     ax.grid(True, alpha=0.3)
-    fig.tight_layout()
+    ax.legend(fontsize=11)
+    plt.tight_layout()
+    
+    if save:
+        save_fig(fig, filename)
+    
     return fig
 
-def plot_time_series_twinx(df: pd.DataFrame) -> Figure:
-    """Plot deret waktu dengan dua sumbu Y untuk Moose dan Serigala."""
-    fig, ax1 = plt.subplots(figsize=(10, 6))
 
-    ax1.set_xlabel('Tahun')
-    ax1.set_ylabel('Populasi Moose', color='skyblue')
-    ax1.plot(df.index, df['Moose'], color='skyblue', label='Moose')
-    ax1.tick_params(axis='y', labelcolor='skyblue')
-
-    ax2 = ax1.twinx()
-    ax2.set_ylabel('Populasi Serigala', color='salmon')
-    ax2.plot(df.index, df['Wolves'], color='salmon', label='Serigala')
-    ax2.tick_params(axis='y', labelcolor='salmon')
-
-    ax1.set_title('Populasi Moose vs. Serigala (Sumbu Terpisah)')
-    ax1.grid(True, alpha=0.3)
-    fig.tight_layout()
-    return fig
-
-def plot_normalized(df: pd.DataFrame) -> Figure:
-    """Plot data populasi yang sudah dinormalisasi (0-1)."""
-    df_normalized = normalize_data(df)
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(df_normalized.index, df_normalized['Moose'], label='Moose (Normal)', color='skyblue')
-    ax.plot(df_normalized.index, df_normalized['Wolves'], label='Serigala (Normal)', color='salmon')
-    ax.set_xlabel('Tahun')
-    ax.set_ylabel('Populasi Ternormalisasi')
-    ax.set_title('Populasi Ternormalisasi (0-1)')
-    ax.legend()
+def plot_oscillation_pattern(
+    df: pd.DataFrame,
+    title: str = "Pola Osilasi (Min-Max Scaling)",
+    save: bool = True,
+    filename: str = "02_pola_osilasi.png"
+) -> Figure:
+    """
+    Plot min-max scaled data showing oscillation pattern.
+    
+    Args:
+        df: DataFrame with scaled columns
+        title: Plot title
+        save: Whether to save
+        filename: Output filename
+        
+    Returns:
+        Matplotlib figure
+    """
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    # Compute min-max scaling
+    prey_min, prey_max = df['prey'].min(), df['prey'].max()
+    pred_min, pred_max = df['predator'].min(), df['predator'].max()
+    
+    prey_mm = (df['prey'] - prey_min) / (prey_max - prey_min)
+    pred_mm = (df['predator'] - pred_min) / (pred_max - pred_min)
+    
+    ax.plot(df.index, prey_mm, 'o-', label='Prey (MinMax)', linewidth=2, markersize=5)
+    ax.plot(df.index, pred_mm, 's-', label='Predator (MinMax)', linewidth=2, markersize=5)
+    ax.set_xlabel('Year', fontsize=12)
+    ax.set_ylabel('Scaled Population', fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight='bold')
     ax.grid(True, alpha=0.3)
-    fig.tight_layout()
+    ax.legend(fontsize=11)
+    plt.tight_layout()
+    
+    if save:
+        save_fig(fig, filename)
+    
     return fig
 
-def plot_phase_diagram(df: pd.DataFrame) -> Figure:
-    """Plot diagram fase yang menunjukkan hubungan Moose vs. Serigala."""
+
+def plot_smoothing_trend(
+    df: pd.DataFrame,
+    window: int = 3,
+    title: str = "Smoothing untuk melihat tren osilasi",
+    save: bool = True,
+    filename: str = "03_smoothing_tren.png"
+) -> Figure:
+    """
+    Plot raw data with moving average smoothing.
+    
+    Args:
+        df: DataFrame with 'prey' and 'predator' columns
+        window: Moving average window size
+        title: Plot title
+        save: Whether to save
+        filename: Output filename
+        
+    Returns:
+        Matplotlib figure
+    """
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    prey_ma = pd.Series(df['prey'].values).rolling(window, center=True).mean()
+    pred_ma = pd.Series(df['predator'].values).rolling(window, center=True).mean()
+    
+    ax.plot(df.index, df['prey'], alpha=0.35, label='Prey raw', linewidth=1.5)
+    ax.plot(df.index, prey_ma, label=f'Prey MA({window})', linewidth=2.5)
+    
+    ax.plot(df.index, df['predator'], alpha=0.35, label='Pred raw', linewidth=1.5)
+    ax.plot(df.index, pred_ma, label=f'Pred MA({window})', linewidth=2.5)
+    
+    ax.set_xlabel('Year', fontsize=12)
+    ax.set_ylabel('Population', fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=11)
+    plt.tight_layout()
+    
+    if save:
+        save_fig(fig, filename)
+    
+    return fig
+
+
+def plot_overlay_initial(
+    df_scaled: pd.DataFrame,
+    sim_prey: np.ndarray,
+    sim_pred: np.ndarray,
+    title: str = "Overlay Awal (Sebelum Tuning)",
+    save: bool = True,
+    filename: str = "04_overlay_awal.png"
+) -> Figure:
+    """
+    Plot overlay of data vs initial simulation.
+    
+    Args:
+        df_scaled: DataFrame with scaled data columns
+        sim_prey: Simulated prey values
+        sim_pred: Simulated predator values
+        title: Plot title
+        save: Whether to save
+        filename: Output filename
+        
+    Returns:
+        Matplotlib figure
+    """
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    ax.plot(df_scaled.index, df_scaled['prey_scaled'], '--', 
+            label='Prey data (scaled)', alpha=0.75, linewidth=2)
+    ax.plot(df_scaled.index, df_scaled['predator_scaled'], '--', 
+            label='Pred data (scaled)', alpha=0.75, linewidth=2)
+    
+    ax.plot(df_scaled.index, sim_prey, label='Prey sim (init)', linewidth=2.5)
+    ax.plot(df_scaled.index, sim_pred, label='Pred sim (init)', linewidth=2.5)
+    
+    ax.set_xlabel('Time index (per tahun)', fontsize=12)
+    ax.set_ylabel('Scaled Population', fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=11)
+    plt.tight_layout()
+    
+    if save:
+        save_fig(fig, filename)
+    
+    return fig
+
+
+def plot_overlay_final(
+    df_scaled: pd.DataFrame,
+    sim_prey: np.ndarray,
+    sim_pred: np.ndarray,
+    title: str = "Overlay FINAL: Data Asli vs Simulasi Lotka–Volterra (Setelah Tuning)",
+    save: bool = True,
+    filename: str = "05_overlay_final.png"
+) -> Figure:
+    """
+    Plot overlay of data vs best-fit simulation.
+    
+    Args:
+        df_scaled: DataFrame with scaled data columns
+        sim_prey: Simulated prey values
+        sim_pred: Simulated predator values
+        title: Plot title
+        save: Whether to save
+        filename: Output filename
+        
+    Returns:
+        Matplotlib figure
+    """
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    ax.plot(df_scaled.index, df_scaled['prey_scaled'], '--', 
+            label='Prey data (scaled)', alpha=0.75, linewidth=2)
+    ax.plot(df_scaled.index, df_scaled['predator_scaled'], '--', 
+            label='Pred data (scaled)', alpha=0.75, linewidth=2)
+    
+    ax.plot(df_scaled.index, sim_prey, label='Prey sim (best)', linewidth=2.5)
+    ax.plot(df_scaled.index, sim_pred, label='Pred sim (best)', linewidth=2.5)
+    
+    ax.set_xlabel('Time index (per tahun)', fontsize=12)
+    ax.set_ylabel('Scaled Population', fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=11)
+    plt.tight_layout()
+    
+    if save:
+        save_fig(fig, filename)
+    
+    return fig
+
+
+def plot_phase_portrait(
+    data_prey: np.ndarray,
+    data_pred: np.ndarray,
+    sim_prey: np.ndarray,
+    sim_pred: np.ndarray,
+    title: str = "Phase Portrait: Data vs Model",
+    save: bool = True,
+    filename: str = "06_phase_portrait.png"
+) -> Figure:
+    """
+    Plot phase portrait (prey vs predator).
+    
+    Args:
+        data_prey: Observed prey values
+        data_pred: Observed predator values
+        sim_prey: Simulated prey values
+        sim_pred: Simulated predator values
+        title: Plot title
+        save: Whether to save
+        filename: Output filename
+        
+    Returns:
+        Matplotlib figure
+    """
     fig, ax = plt.subplots(figsize=(8, 8))
-    ax.plot(df['Moose'], df['Wolves'], marker='o', linestyle='-', color='cyan', alpha=0.7)
-    ax.set_xlabel('Populasi Moose')
-    ax.set_ylabel('Populasi Serigala')
-    ax.set_title('Diagram Fase: Moose vs. Serigala')
+    
+    ax.plot(data_prey, data_pred, 'o-', alpha=0.6, label='Data (scaled)', 
+            linewidth=2, markersize=6)
+    ax.plot(sim_prey, sim_pred, '-', linewidth=2.5, label='Simulasi (best)')
+    
+    ax.set_xlabel('Prey', fontsize=12)
+    ax.set_ylabel('Predator', fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight='bold')
     ax.grid(True, alpha=0.3)
-
-    # Anotasi tahun setiap 4 langkah
-    for i, year in enumerate(df.index):
-        if i % 4 == 0:
-            ax.text(df['Moose'].iloc[i], df['Wolves'].iloc[i], str(year), fontsize=9, alpha=0.8)
-
-    fig.tight_layout()
+    ax.legend(fontsize=11)
+    plt.tight_layout()
+    
+    if save:
+        save_fig(fig, filename)
+    
     return fig
 
-def plot_3d_trajectory(df: pd.DataFrame) -> Figure:
-    """Plot trajektori 3D (Tahun, Moose, Serigala)."""
+
+def plot_3d_trajectory_matplotlib(
+    t: np.ndarray,
+    prey: np.ndarray,
+    predator: np.ndarray,
+    title: str = "3D Trajectory: time–prey–predator (Simulasi)",
+    save: bool = True,
+    filename: str = "07_3d_trajectory.png"
+) -> Figure:
+    """
+    Plot 3D trajectory using matplotlib (fallback).
+    
+    Args:
+        t: Time values
+        prey: Prey values
+        predator: Predator values
+        title: Plot title
+        save: Whether to save
+        filename: Output filename
+        
+    Returns:
+        Matplotlib figure
+    """
+    from mpl_toolkits.mplot3d import Axes3D
+    
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection='3d')
-    ax.plot(df.index, df['Moose'], df['Wolves'], color='magenta')
-    ax.set_xlabel('Tahun')
-    ax.set_ylabel('Populasi Moose')
-    ax.set_zlabel('Populasi Serigala')
-    ax.set_title('Trajektori 3D Populasi')
-    ax.view_init(elev=20., azim=-35)
-    fig.tight_layout()
+    
+    ax.plot(t, prey, predator, linewidth=2.5)
+    ax.set_xlabel('Time index', fontsize=11)
+    ax.set_ylabel('Prey (sim)', fontsize=11)
+    ax.set_zlabel('Predator (sim)', fontsize=11)
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    
+    if save:
+        save_fig(fig, filename)
+    
     return fig
 
-def plot_decomposition(df: pd.DataFrame, column: str, period: int) -> Tuple[Optional[Figure], str]:
-    """Plot dekomposisi deret waktu (tren, siklus, residual)."""
-    if not check_statsmodels():
-        # Fallback manual jika statsmodels tidak ada
-        rolling_mean = df[column].rolling(window=period, center=True).mean()
-        detrended = df[column] - rolling_mean
-        residual = detrended - detrended.rolling(window=2, center=True).mean() # Simple residual
 
-        fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(10, 12), sharex=True)
-        df[column].plot(ax=ax1, title='Data Asli')
-        rolling_mean.plot(ax=ax2, title='Tren (Moving Average)')
-        detrended.plot(ax=ax3, title='Siklus (Data - Tren)')
-        residual.plot(ax=ax4, title='Residual')
-        fig.suptitle(f'Dekomposisi Manual untuk {column}', fontsize=16)
-        fig.tight_layout(rect=[0, 0.03, 1, 0.95])
-        return fig, "`statsmodels` tidak ditemukan. Menggunakan dekomposisi manual dengan moving average."
+def plot_3d_trajectory_plotly(
+    t: np.ndarray,
+    prey: np.ndarray,
+    predator: np.ndarray,
+    title: str = "3D Trajectory: time–prey–predator (Simulasi)"
+) -> Optional[go.Figure]:
+    """
+    Plot 3D trajectory using Plotly (for Streamlit).
+    
+    Args:
+        t: Time values
+        prey: Prey values
+        predator: Predator values
+        title: Plot title
+        
+    Returns:
+        Plotly figure or None if Plotly not available
+    """
+    if not PLOTLY_AVAILABLE:
+        return None
+    
+    fig = go.Figure(data=go.Scatter3d(
+        x=t,
+        y=prey,
+        z=predator,
+        mode='lines',
+        line=dict(color='blue', width=4),
+        name='Trajectory'
+    ))
+    
+    fig.update_layout(
+        title=title,
+        scene=dict(
+            xaxis_title='Time index',
+            yaxis_title='Prey (sim)',
+            zaxis_title='Predator (sim)'
+        ),
+        width=800,
+        height=600
+    )
+    
+    return fig
 
-    from statsmodels.tsa.seasonal import seasonal_decompose
-    result = seasonal_decompose(df[column], model='additive', period=period)
-    fig = result.plot()
-    fig.set_size_inches(10, 12)
-    fig.suptitle(f'Dekomposisi Pola untuk {column}', fontsize=16)
-    fig.tight_layout(rect=[0, 0.03, 1, 0.95])
-    return fig, f"Dekomposisi menggunakan `statsmodels` dengan periode {period}."
 
-def plot_rolling_stats(df: pd.DataFrame, column: str, window: int) -> Figure:
-    """Plot rata-rata dan standar deviasi bergulir."""
-    rolling_mean = df[column].rolling(window=window).mean()
-    rolling_std = df[column].rolling(window=window).std()
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(df.index, df[column], label='Data Asli')
-    ax.plot(rolling_mean.index, rolling_mean, label=f'Rata-rata Bergulir ({window} thn)', color='yellow')
-    ax.plot(rolling_std.index, rolling_std, label=f'Std Dev Bergulir ({window} thn)', color='lime')
-    ax.set_xlabel('Tahun')
-    ax.set_ylabel('Populasi')
-    ax.set_title(f'Statistik Bergulir untuk {column}')
-    ax.legend()
+def plot_overlay_real_scale(
+    df: pd.DataFrame,
+    sim_prey_real: np.ndarray,
+    sim_pred_real: np.ndarray,
+    title: str = "Overlay pada Skala Asli (Real Population)",
+    save: bool = True,
+    filename: str = "08_overlay_skala_asli.png"
+) -> Figure:
+    """
+    Plot overlay on real population scale.
+    
+    Args:
+        df: DataFrame with original 'prey' and 'predator' columns
+        sim_prey_real: Simulated prey values on real scale
+        sim_pred_real: Simulated predator values on real scale
+        title: Plot title
+        save: Whether to save
+        filename: Output filename
+        
+    Returns:
+        Matplotlib figure
+    """
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    ax.plot(df.index, df['prey'], '--', label='Prey data (real)', 
+            alpha=0.8, linewidth=2)
+    ax.plot(df.index, df['predator'], '--', label='Pred data (real)', 
+            alpha=0.8, linewidth=2)
+    
+    ax.plot(df.index, sim_prey_real, label='Prey sim (real-scale)', linewidth=2.5)
+    ax.plot(df.index, sim_pred_real, label='Pred sim (real-scale)', linewidth=2.5)
+    
+    ax.set_xlabel('Year', fontsize=12)
+    ax.set_ylabel('Population', fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight='bold')
     ax.grid(True, alpha=0.3)
-    fig.tight_layout()
+    ax.legend(fontsize=11)
+    plt.tight_layout()
+    
+    if save:
+        save_fig(fig, filename)
+    
     return fig
 
-def run_adf_test(series: pd.Series) -> Tuple[float, float, str]:
-    """Jalankan Uji Augmented Dickey-Fuller (ADF)."""
-    if not check_statsmodels():
-        return np.nan, np.nan, "`statsmodels` tidak ditemukan, tidak bisa menjalankan uji ADF."
 
-    from statsmodels.tsa.stattools import adfuller
-    result = adfuller(series.dropna())
-    adf_stat, p_value = result[0], result[1]
+def plot_residuals(
+    data_prey: np.ndarray,
+    data_pred: np.ndarray,
+    sim_prey: np.ndarray,
+    sim_pred: np.ndarray,
+    years: np.ndarray,
+    title: str = "Residuals: Data - Simulation"
+) -> Figure:
+    """
+    Plot residuals for prey and predator.
+    
+    Args:
+        data_prey: Observed prey values
+        data_pred: Observed predator values
+        sim_prey: Simulated prey values
+        sim_pred: Simulated predator values
+        years: Year values for x-axis
+        title: Plot title
+        
+    Returns:
+        Matplotlib figure
+    """
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+    
+    res_prey = data_prey - sim_prey
+    res_pred = data_pred - sim_pred
+    
+    ax1.plot(years, res_prey, 'o-', color='blue', linewidth=2, markersize=5)
+    ax1.axhline(y=0, color='red', linestyle='--', alpha=0.5)
+    ax1.set_ylabel('Residual (Prey)', fontsize=12)
+    ax1.set_title(f'{title} - Prey', fontsize=13, fontweight='bold')
+    ax1.grid(True, alpha=0.3)
+    
+    ax2.plot(years, res_pred, 's-', color='orange', linewidth=2, markersize=5)
+    ax2.axhline(y=0, color='red', linestyle='--', alpha=0.5)
+    ax2.set_xlabel('Year', fontsize=12)
+    ax2.set_ylabel('Residual (Predator)', fontsize=12)
+    ax2.set_title(f'{title} - Predator', fontsize=13, fontweight='bold')
+    ax2.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    return fig
 
-    if p_value <= 0.05:
-        interpretation = f"P-value ({p_value:.3f}) <= 0.05. Data kemungkinan stasioner."
-    else:
-        interpretation = f"P-value ({p_value:.3f}) > 0.05. Data kemungkinan tidak stasioner."
-
-    return adf_stat, p_value, interpretation

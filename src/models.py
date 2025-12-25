@@ -1,97 +1,251 @@
 """
-Modul untuk simulasi dan fitting model Lotka-Volterra.
+Lotka-Volterra model functions
 """
-
 import numpy as np
-import pandas as pd
 from scipy.integrate import solve_ivp
-from scipy.optimize import least_squares
-from typing import Tuple, Dict, Any
-import matplotlib.pyplot as plt
+from scipy.optimize import differential_evolution
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+from typing import Dict, Tuple, Optional, Callable
+import logging
 
-def lotka_volterra(t, y, alpha, beta, delta, gamma):
-    """Mendefinisikan sistem persamaan diferensial Lotka-Volterra."""
-    # y[0] = Moose (mangsa), y[1] = Serigala (predator)
-    dxdt = alpha * y[0] - beta * y[0] * y[1]
-    dydt = delta * y[0] * y[1] - gamma * y[1]
-    return [dxdt, dydt]
+from .utils import Config
+
+logger = logging.getLogger(__name__)
 
 
-def run_simulation(params: Dict[str, float], initial_conditions: Tuple[float, float], t_eval: np.ndarray) -> pd.DataFrame:
-    """Menjalankan simulasi Lotka-Volterra dengan parameter yang diberikan."""
-    alpha, beta, delta, gamma = params['alpha'], params['beta'], params['delta'], params['gamma']
+def lv_rhs(t: float, z: np.ndarray, alpha: float, beta: float, delta: float, gamma: float) -> np.ndarray:
+    """
+    Lotka-Volterra right-hand side function for ODE system.
+    
+    dx/dt = alpha*x - beta*x*y
+    dy/dt = delta*x*y - gamma*y
+    
+    Args:
+        t: Time (not used, but required by solve_ivp)
+        z: State vector [x, y] where x=prey, y=predator
+        alpha: Prey growth rate
+        beta: Predation rate
+        delta: Predator growth efficiency
+        gamma: Predator death rate
+        
+    Returns:
+        Array [dx/dt, dy/dt]
+    """
+    x, y = z
+    dxdt = alpha * x - beta * x * y
+    dydt = delta * x * y - gamma * y
+    return np.array([dxdt, dydt])
 
-    solution = solve_ivp(
-        fun=lotka_volterra,
-        t_span=[t_eval[0], t_eval[-1]],
-        y0=initial_conditions,
-        t_eval=t_eval,
-        args=(alpha, beta, delta, gamma)
-    )
 
-    sim_df = pd.DataFrame({
-        'Moose_sim': solution.y[0],
-        'Wolves_sim': solution.y[1]
-    }, index=t_eval.astype(int))
-    return sim_df
-
-
-def fit_parameters(df: pd.DataFrame) -> Tuple[Dict[str, float], Dict[str, float]]:
-    """Mencari parameter Lotka-Volterra terbaik menggunakan least squares."""
-    initial_params = [0.5, 0.02, 0.01, 0.8]  # Tebakan awal
-    t_eval = np.arange(len(df))
-    y_true = df[['Moose', 'Wolves']].values
-
-    def residuals(params):
-        alpha, beta, delta, gamma = params
-        sim_result = solve_ivp(
-            fun=lotka_volterra,
-            t_span=[t_eval[0], t_eval[-1]],
-            y0=y_true[0],
+def simulate_lv(
+    params: Dict[str, float],
+    initial_conditions: Tuple[float, float],
+    t_eval: np.ndarray,
+    method: str = 'RK45',
+    rtol: float = None,
+    atol: float = None
+) -> Optional[np.ndarray]:
+    """
+    Simulate Lotka-Volterra model using solve_ivp.
+    
+    Args:
+        params: Dictionary with keys 'alpha', 'beta', 'delta', 'gamma'
+        initial_conditions: Tuple (x0, y0) initial prey and predator populations
+        t_eval: Time points to evaluate solution
+        method: ODE solver method (default: 'RK45')
+        rtol: Relative tolerance (default: from Config)
+        atol: Absolute tolerance (default: from Config)
+        
+    Returns:
+        Array of shape (len(t_eval), 2) with [prey, predator] columns, or None if failed
+    """
+    if rtol is None:
+        rtol = Config.SOLVER_RTOL
+    if atol is None:
+        atol = Config.SOLVER_ATOL
+    
+    try:
+        sol = solve_ivp(
+            lv_rhs,
+            (t_eval[0], t_eval[-1]),
+            initial_conditions,
+            args=(params['alpha'], params['beta'], params['delta'], params['gamma']),
             t_eval=t_eval,
-            args=(alpha, beta, delta, gamma)
-        ).y.T
-        # Hitung residual (perbedaan antara data asli dan simulasi)
-        return (y_true - sim_result).flatten()
+            method=method,
+            rtol=rtol,
+            atol=atol
+        )
+        
+        if not sol.success:
+            logger.warning(f"Solver failed: {sol.message}")
+            return None
+        
+        if sol.y.shape[1] != len(t_eval):
+            logger.warning(f"Solution shape mismatch: expected {len(t_eval)}, got {sol.y.shape[1]}")
+            return None
+        
+        # Check for invalid values
+        if np.any(~np.isfinite(sol.y)):
+            logger.warning("Solution contains non-finite values")
+            return None
+        
+        # Return as (N, 2) array
+        return sol.y.T
+        
+    except Exception as e:
+        logger.error(f"Error in simulation: {e}")
+        return None
 
-    result = least_squares(residuals, initial_params, bounds=(0, np.inf))
-    fitted_params = {
+
+def compute_metrics(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    scaled: bool = True
+) -> Dict[str, float]:
+    """
+    Compute MSE and MAE metrics.
+    
+    Args:
+        y_true: True values
+        y_pred: Predicted values
+        scaled: Whether data is scaled (for reporting)
+        
+    Returns:
+        Dictionary with 'mse' and 'mae' keys
+    """
+    mse = mean_squared_error(y_true, y_pred)
+    mae = mean_absolute_error(y_true, y_pred)
+    
+    return {
+        'mse': mse,
+        'mae': mae,
+        'scaled': scaled
+    }
+
+
+def fit_de_params(
+    prey_data: np.ndarray,
+    pred_data: np.ndarray,
+    t_eval: np.ndarray,
+    initial_conditions: Tuple[float, float],
+    bounds: Optional[list] = None,
+    weights: Optional[Dict[str, float]] = None,
+    maxiter: int = None,
+    popsize: int = None,
+    seed: int = None,
+    progress_callback: Optional[Callable] = None
+) -> Dict[str, float]:
+    """
+    Fit Lotka-Volterra parameters using Differential Evolution.
+    
+    Args:
+        prey_data: Observed prey values
+        pred_data: Observed predator values
+        t_eval: Time points
+        initial_conditions: Initial (x0, y0)
+        bounds: Parameter bounds [(min, max), ...] for [alpha, beta, delta, gamma]
+        weights: Dictionary with 'w_prey' and 'w_pred' keys
+        maxiter: Maximum iterations for DE
+        popsize: Population size for DE
+        seed: Random seed
+        progress_callback: Optional callback function for progress updates
+        
+    Returns:
+        Dictionary with best parameters {'alpha', 'beta', 'delta', 'gamma'}
+    """
+    if bounds is None:
+        bounds = Config.DE_BOUNDS
+    
+    if weights is None:
+        weights = Config.DEFAULT_WEIGHTS
+    
+    if maxiter is None:
+        maxiter = Config.DE_MAXITER
+    
+    if popsize is None:
+        popsize = Config.DE_POPSIZE
+    
+    if seed is None:
+        seed = Config.DE_SEED
+    
+    w_prey = weights.get('w_prey', 1.0)
+    w_pred = weights.get('w_pred', 3.0)
+    
+    def loss_function(params):
+        """Loss function for optimization"""
+        p_dict = {
+            'alpha': params[0],
+            'beta': params[1],
+            'delta': params[2],
+            'gamma': params[3]
+        }
+        
+        sim_results = simulate_lv(p_dict, initial_conditions, t_eval)
+        if sim_results is None:
+            return 1e9
+        
+        xs, ys = sim_results[:, 0], sim_results[:, 1]
+        
+        # Check for invalid values
+        if np.any(~np.isfinite(xs)) or np.any(~np.isfinite(ys)):
+            return 1e9
+        
+        mse_prey = mean_squared_error(prey_data, xs)
+        mse_pred = mean_squared_error(pred_data, ys)
+        
+        loss = w_prey * mse_prey + w_pred * mse_pred
+        
+        # Call progress callback if provided
+        if progress_callback:
+            try:
+                progress_callback(loss)
+            except:
+                pass
+        
+        return loss
+    
+    logger.info(f"Starting DE optimization (maxiter={maxiter}, popsize={popsize})")
+    
+    result = differential_evolution(
+        loss_function,
+        bounds,
+        maxiter=maxiter,
+        popsize=popsize,
+        tol=Config.DE_TOL,
+        seed=seed,
+        polish=True
+    )
+    
+    best_params = {
         'alpha': result.x[0],
         'beta': result.x[1],
         'delta': result.x[2],
         'gamma': result.x[3]
     }
-
-    # Hitung error (RMSE)
-    final_residuals = residuals(result.x).reshape(y_true.shape)
-    rmse_moose = np.sqrt(np.mean(final_residuals[:, 0]**2))
-    rmse_wolves = np.sqrt(np.mean(final_residuals[:, 1]**2))
-    errors = {'RMSE_Moose': rmse_moose, 'RMSE_Wolves': rmse_wolves}
-
-    return fitted_params, errors
-
-
-def plot_simulation_vs_data(df: pd.DataFrame, sim_df: pd.DataFrame) -> plt.Figure:
-    """Plot perbandingan data asli dengan hasil simulasi."""
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(df.index, df['Moose'], 'o-', label='Data Moose', color='skyblue')
-    ax.plot(df.index, df['Wolves'], 'o-', label='Data Serigala', color='salmon')
-    ax.plot(df.index, sim_df['Moose_sim'], '--', label='Simulasi Moose', color='cyan')
-    ax.plot(df.index, sim_df['Wolves_sim'], '--', label='Simulasi Serigala', color='red')
-    ax.set_xlabel('Tahun')
-    ax.set_ylabel('Populasi')
-    ax.set_title('Data Asli vs. Hasil Simulasi Lotka-Volterra')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    return fig
-
-def plot_fit_vs_data(df: pd.DataFrame, fitted_params: Dict[str, float]) -> plt.Figure:
-    """Plot perbandingan data asli dengan model yang sudah di-fit."""
-    t_eval = np.arange(len(df))
-    initial_conditions = (df['Moose'].iloc[0], df['Wolves'].iloc[0])
     
-    sim_df = run_simulation(fitted_params, initial_conditions, t_eval)
-    sim_df.index = df.index # Sesuaikan index tahun
+    logger.info(f"DE completed. Best loss: {result.fun:.6f}")
+    logger.info(f"Best params: {best_params}")
+    
+    return best_params
 
-    return plot_simulation_vs_data(df, sim_df)
+
+def compute_equilibrium(alpha: float, beta: float, delta: float, gamma: float) -> Tuple[float, float]:
+    """
+    Compute equilibrium point for Lotka-Volterra system.
+    
+    Equilibrium: (gamma/delta, alpha/beta)
+    
+    Args:
+        alpha, beta, delta, gamma: Model parameters
+        
+    Returns:
+        Tuple (x_eq, y_eq) equilibrium point
+    """
+    if delta == 0 or beta == 0:
+        return (0.0, 0.0)
+    
+    x_eq = gamma / delta
+    y_eq = alpha / beta
+    
+    return (x_eq, y_eq)
+

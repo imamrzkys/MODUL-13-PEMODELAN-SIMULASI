@@ -1,76 +1,162 @@
 """
-Modul untuk memuat dan memproses data populasi.
+Data loading and processing functions
 """
-
-import io
 import pandas as pd
-import streamlit as st
-from typing import Tuple
+import numpy as np
+from typing import Tuple, Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 
-@st.cache_data
-def load_data() -> pd.DataFrame:
-    """Muat dataset populasi Moose dan Serigala dari string.
-
-    Returns:
-        pd.DataFrame: DataFrame dengan kolom 'Year', 'Wolves', 'Moose'.
+def load_data(filepath: str = "wolf_moose_nps.csv") -> pd.DataFrame:
     """
-    data_string = """
-    Year,Wolves,Moose
-    1980,50,664
-    1981,30,650
-    1982,14,700
-    1983,23,900
-    1984,24,811
-    1985,22,1062
-    1986,20,1025
-    1987,16,1380
-    1988,12,1653
-    1989,11,1397
-    1990,15,1216
-    1991,12,1313
-    1992,12,1600
-    1993,13,1880
-    1994,15,1800
-    1995,16,2400
-    1996,22,1200
-    1997,24,500
-    1998,14,700
-    1999,25,750
-    2000,29,850
-    2001,19,900
-    2002,17,1000
-    2003,19,900
-    2004,29,750
-    2005,30,540
-    2006,30,385
-    2007,21,450
-    2008,23,650
-    2009,24,530
-    2010,19,510
-    2011,16,515
-    2012,9,750
-    2013,8,975
-    2014,9,1050
-    2015,3,1250
-    2016,2,1300
-    2017,2,1600
-    2018,2,1500
-    2019,14,2060
-    """
-    df = pd.read_csv(io.StringIO(data_string.strip()))
-    df = df.set_index('Year')
-    return df
-
-def filter_data_by_year(df: pd.DataFrame, year_range: Tuple[int, int]) -> pd.DataFrame:
-    """Filter DataFrame berdasarkan rentang tahun yang dipilih.
-
+    Load and prepare the predator-prey dataset.
+    
     Args:
-        df (pd.DataFrame): DataFrame asli.
-        year_range (Tuple[int, int]): Tuple berisi tahun mulai dan tahun akhir.
-
+        filepath: Path to CSV file
+        
     Returns:
-        pd.DataFrame: DataFrame yang sudah difilter.
+        DataFrame with columns: year, prey, predator
     """
-    start_year, end_year = year_range
-    return df.loc[start_year:end_year]
+    try:
+        df = pd.read_csv(filepath)
+        logger.info(f"Loaded data from {filepath}: {len(df)} rows")
+        return clean_columns(df)
+    except FileNotFoundError:
+        logger.error(f"File not found: {filepath}")
+        raise
+    except Exception as e:
+        logger.error(f"Error loading data: {e}")
+        raise
+
+
+def clean_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Clean column names and standardize format.
+    
+    Args:
+        df: Raw DataFrame
+        
+    Returns:
+        Cleaned DataFrame with standardized columns
+    """
+    # Strip and lowercase column names
+    df.columns = [c.strip().lower() for c in df.columns]
+    
+    # Check required columns
+    required = {"year", "wolves", "moose"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(
+            f"Kolom wajib tidak ada: {missing}. "
+            f"Kolom yang ada: {df.columns.tolist()}"
+        )
+    
+    # Select and rename columns
+    df_clean = df[["year", "moose", "wolves"]].copy()
+    df_clean = df_clean.rename(columns={"moose": "prey", "wolves": "predator"})
+    
+    # Sort by year and set as index
+    df_clean = df_clean.sort_values("year").reset_index(drop=True)
+    df_clean = df_clean.set_index("year")
+    
+    # Ensure numeric types
+    df_clean['prey'] = pd.to_numeric(df_clean['prey'], errors='coerce')
+    df_clean['predator'] = pd.to_numeric(df_clean['predator'], errors='coerce')
+    
+    # Remove any rows with NaN
+    df_clean = df_clean.dropna()
+    
+    logger.info(f"Cleaned data: {len(df_clean)} rows, years {df_clean.index.min()}-{df_clean.index.max()}")
+    return df_clean
+
+
+def add_scaling(df: pd.DataFrame, method: str = "max") -> Tuple[pd.DataFrame, float]:
+    """
+    Add scaled columns to dataframe.
+    
+    Args:
+        df: DataFrame with 'prey' and 'predator' columns
+        method: Scaling method ('max' or 'minmax')
+        
+    Returns:
+        Tuple of (DataFrame with scaled columns, scale_factor)
+    """
+    df_scaled = df.copy()
+    
+    if method == "max":
+        # Scale by maximum value (as in notebook)
+        scale_factor = max(df['prey'].max(), df['predator'].max())
+        df_scaled['prey_scaled'] = df_scaled['prey'] / scale_factor
+        df_scaled['predator_scaled'] = df_scaled['predator'] / scale_factor
+    elif method == "minmax":
+        # Min-max scaling
+        prey_min, prey_max = df['prey'].min(), df['prey'].max()
+        pred_min, pred_max = df['predator'].min(), df['predator'].max()
+        
+        df_scaled['prey_scaled'] = (df_scaled['prey'] - prey_min) / (prey_max - prey_min)
+        df_scaled['predator_scaled'] = (df_scaled['predator'] - pred_min) / (pred_max - pred_min)
+        scale_factor = 1.0  # Not used for minmax
+    else:
+        raise ValueError(f"Unknown scaling method: {method}")
+    
+    logger.info(f"Added scaling (method={method}, scale_factor={scale_factor})")
+    return df_scaled, scale_factor
+
+
+def filter_year_range(
+    df: pd.DataFrame,
+    year_min: Optional[int] = None,
+    year_max: Optional[int] = None
+) -> pd.DataFrame:
+    """
+    Filter dataframe by year range.
+    
+    Args:
+        df: DataFrame with year as index
+        year_min: Minimum year (inclusive)
+        year_max: Maximum year (inclusive)
+        
+    Returns:
+        Filtered DataFrame
+    """
+    df_filtered = df.copy()
+    
+    if year_min is not None:
+        df_filtered = df_filtered[df_filtered.index >= year_min]
+    if year_max is not None:
+        df_filtered = df_filtered[df_filtered.index <= year_max]
+    
+    logger.info(f"Filtered to {len(df_filtered)} rows (years {df_filtered.index.min()}-{df_filtered.index.max()})")
+    return df_filtered
+
+
+def get_smoothed_series(
+    df: pd.DataFrame,
+    window: int = 3,
+    columns: Optional[list] = None
+) -> pd.DataFrame:
+    """
+    Apply moving average smoothing to time series.
+    
+    Args:
+        df: DataFrame with time series data
+        window: Window size for moving average
+        columns: Columns to smooth (default: ['prey', 'predator'])
+        
+    Returns:
+        DataFrame with smoothed columns
+    """
+    if columns is None:
+        columns = ['prey', 'predator']
+    
+    df_smooth = df.copy()
+    for col in columns:
+        if col in df.columns:
+            df_smooth[f'{col}_ma'] = pd.Series(df[col].values).rolling(
+                window, center=True
+            ).mean()
+    
+    return df_smooth
+
