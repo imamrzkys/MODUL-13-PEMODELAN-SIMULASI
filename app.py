@@ -422,10 +422,16 @@ def load_and_prepare_data():
     return df_raw, df_scaled, prey_s, pred_s, t_eval, initial_conditions, scale_factor
 
 
+# Ensure visualizations directory exists
+utils.ensure_dir(Config.VIZ_DIR)
+
 # Load data once
 try:
     df_raw, df_scaled, prey_s, pred_s, t_eval, initial_conditions, scale_factor = load_and_prepare_data()
     st.session_state.scale_factor = scale_factor
+except FileNotFoundError as e:
+    st.error(f"Dataset tidak ditemukan: {e}\n\nPastikan file 'wolf_moose_nps.csv' ada di root directory.")
+    st.stop()
 except Exception as e:
     st.error(f"Error loading data: {e}")
     st.stop()

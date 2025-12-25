@@ -20,12 +20,27 @@ def load_data(filepath: str = "wolf_moose_nps.csv") -> pd.DataFrame:
         DataFrame with columns: year, prey, predator
     """
     try:
+        # Try to load from current directory first
         df = pd.read_csv(filepath)
         logger.info(f"Loaded data from {filepath}: {len(df)} rows")
         return clean_columns(df)
     except FileNotFoundError:
-        logger.error(f"File not found: {filepath}")
-        raise
+        # Try alternative paths for deployment
+        import os
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        parent_dir = os.path.dirname(base_dir)
+        alt_paths = [
+            filepath,
+            os.path.join(parent_dir, filepath),
+            os.path.join(os.getcwd(), filepath)
+        ]
+        for alt_path in alt_paths:
+            if os.path.exists(alt_path):
+                df = pd.read_csv(alt_path)
+                logger.info(f"Loaded data from {alt_path}: {len(df)} rows")
+                return clean_columns(df)
+        logger.error(f"File not found in any of these paths: {alt_paths}")
+        raise FileNotFoundError(f"Dataset file '{filepath}' tidak ditemukan. Pastikan file ada di root directory.")
     except Exception as e:
         logger.error(f"Error loading data: {e}")
         raise
